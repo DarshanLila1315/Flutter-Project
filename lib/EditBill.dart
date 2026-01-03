@@ -1,0 +1,916 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+import 'package:fluttertoast/fluttertoast.dart';
+import 'package:intl/intl.dart';
+import 'utils.dart';
+import 'party_management.dart';
+
+class EditBillScreen extends StatefulWidget {
+  final String billNumber;
+
+  const EditBillScreen({super.key, required this.billNumber});
+
+  @override
+  State<EditBillScreen> createState() => _EditBillScreenState();
+}
+
+class _EditBillScreenState extends State<EditBillScreen> {
+  final _nameController = TextEditingController();
+  final _phoneController = TextEditingController();
+  final _cityController = TextEditingController();
+  final _stateController = TextEditingController();
+  final _billNumberController = TextEditingController();
+  final _nameFocusNode = FocusNode();
+  DateTime _selectedDate = DateTime.now();
+  List<Map<String, dynamic>> _items = [];
+  bool _showSuggestions = false;
+  bool _isLoading = true;
+  bool _isSaving = false;
+  String? _billDocumentId;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadBillData();
+    _nameFocusNode.addListener(() {
+      setState(() => _showSuggestions = _nameFocusNode.hasFocus);
+    });
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _cityController.dispose();
+    _stateController.dispose();
+    _billNumberController.dispose();
+    _nameFocusNode.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadBillData() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final querySnapshot = await FirebaseFirestore.instance
+          .collection('bills')
+          .where('billNumber', isEqualTo: widget.billNumber)
+          .where('user', isEqualTo: user?.uid)
+          .get();
+
+      if (querySnapshot.docs.isNotEmpty) {
+        final doc = querySnapshot.docs.first;
+        final data = doc.data();
+        _billDocumentId = doc.id;
+
+        setState(() {
+          _nameController.text = data['customerName'] ?? '';
+          _phoneController.text = data['customerPhone'] ?? '';
+          _cityController.text = data['customerCity'] ?? '';
+          _stateController.text = data['customerState'] ?? '';
+          _billNumberController.text = data['billNumber'] ?? '';
+          _selectedDate = (data['date'] as Timestamp?)?.toDate() ?? DateTime.now();
+
+          final itemsList = data['items'] as List? ?? [];
+          _items = itemsList.map((item) => Map<String, dynamic>.from({
+            'name': item['name']?.toString() ?? '',
+            'quantity': item['quantity']?.toString() ?? '',
+            'price': item['price']?.toString() ?? '',
+          })).toList();
+
+          _isLoading = false;
+        });
+      } else {
+        AppUtils.showError('Bill not found');
+        Navigator.pop(context);
+      }
+    } catch (e) {
+      AppUtils.showError('Error loading bill: $e');
+      Navigator.pop(context);
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _loadCustomerDetails(String customerName) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final customerQuery = await FirebaseFirestore.instance
+          .collection('customers')
+          .where('user', isEqualTo: user?.uid)
+          .where('name', isEqualTo: customerName)
+          .limit(1)
+          .get();
+
+      if (customerQuery.docs.isNotEmpty) {
+        final customerData = customerQuery.docs.first.data();
+        setState(() {
+          _phoneController.text = customerData['phone'] ?? '';
+          _cityController.text = customerData['city'] ?? '';
+          _stateController.text = customerData['state'] ?? '';
+        });
+      }
+    } catch (e) {
+      AppUtils.showError('Error loading customer details: $e');
+    }
+  }
+
+  void _showAddCustomerDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => PartyDialog(
+        partyType: PartyType.customer,
+        initialName: _nameController.text,
+        onPartyAdded: (customerData) {
+          setState(() {
+            _nameController.text = customerData['name'] ?? '';
+            _phoneController.text = customerData['phone'] ?? '';
+            _cityController.text = customerData['city'] ?? '';
+            _stateController.text = customerData['state'] ?? '';
+          });
+        },
+      ),
+    );
+  }
+
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
+      context: context,
+      initialDate: _selectedDate,
+      firstDate: DateTime(2000),
+      lastDate: DateTime.now(),
+    );
+    if (picked != null) {
+      setState(() => _selectedDate = picked);
+    }
+  }
+
+  void _addItem() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Add Item'),
+        content: SizedBox(
+          width: double.maxFinite,
+          height: 400,
+          child: _buildProductList(),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _editItem(int index) {
+    final currentItem = _items[index];
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Edit Item'),
+        content: SizedBox(
+          width: double.maxFinite,
+          child: EditItemForm(
+            initialItem: currentItem,
+            onItemUpdated: (updatedItem) {
+              setState(() {
+                _items[index] = updatedItem;
+              });
+              Navigator.pop(context);
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProductList() {
+    final user = FirebaseAuth.instance.currentUser;
+    return StreamBuilder<QuerySnapshot>(
+      stream: FirebaseFirestore.instance
+          .collection('stocks')
+          .where('user', isEqualTo: user?.uid)
+          .where('quantity', isGreaterThan: 0)
+          .snapshots(),
+      builder: (context, snapshot) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Center(child: CircularProgressIndicator());
+        }
+
+        if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
+          return const Center(child: Text('No stocks available'));
+        }
+
+        return ListView.builder(
+          itemCount: snapshot.data!.docs.length,
+          itemBuilder: (context, index) {
+            final doc = snapshot.data!.docs[index];
+            final data = doc.data() as Map<String, dynamic>;
+            return ProductSelectionCard(
+              productData: data,
+              onItemAdded: (item) {
+                setState(() => _items.add(item));
+                Navigator.pop(context);
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
+  double _calculateSubtotal() {
+    return _items.fold(0.0, (sum, item) {
+      final quantity = int.tryParse(item['quantity'] ?? '0') ?? 0;
+      final price = double.tryParse(item['price'] ?? '0') ?? 0.0;
+      return sum + (quantity * price);
+    });
+  }
+  Future<bool> _customerExists(String customerName) async {
+    if (customerName.trim().isEmpty) return false;
+
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      final customerQuery = await FirebaseFirestore.instance
+          .collection('customers')
+          .where('user', isEqualTo: user?.uid)
+          .where('name', isEqualTo: customerName.trim())
+          .limit(1)
+          .get();
+
+      return customerQuery.docs.isNotEmpty;
+    } catch (e) {
+      print('Error checking customer existence: $e');
+      return false;
+    }
+  }
+  Future<void> _updateBill() async {
+    if (_nameController.text.isEmpty || _items.isEmpty) {
+      Fluttertoast.showToast(
+        msg: 'Please add customer name and items',
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: Colors.orange,
+        textColor: Colors.white,
+      );
+      return;
+    }
+
+    // Check if customer exists
+    final customerExists = await _customerExists(_nameController.text);
+    if (!customerExists) {
+      Fluttertoast.showToast(
+        msg: 'Customer "${_nameController.text}" not found. Please add customer first.',
+        toastLength: Toast.LENGTH_LONG,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: Colors.red,
+        textColor: Colors.white,
+      );
+
+      // Optionally show the add customer dialog
+      _showAddCustomerDialog();
+      return;
+    }
+
+    setState(() => _isSaving = true);
+    LoadingDialog.show(context, 'Updating bill...');
+
+    try {
+      // Revert original stock changes
+      await _revertOriginalStockChanges();
+
+      // Apply new stock changes
+      await _applyNewStockChanges();
+
+      final subtotal = _calculateSubtotal();
+      final tax = subtotal * 0.05;
+      final total = subtotal + tax;
+
+      await FirebaseFirestore.instance.collection('bills').doc(_billDocumentId).update({
+        'customerName': _nameController.text,
+        'customerPhone': _phoneController.text,
+        'customerCity': _cityController.text,
+        'customerState': _stateController.text,
+        'date': _selectedDate,
+        'items': _items,
+        'subtotal': subtotal,
+        'tax': tax,
+        'total': total,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      // Update corresponding transaction
+      await _updateCorrespondingTransaction();
+
+      LoadingDialog.hide(context);
+      Fluttertoast.showToast(
+        msg: 'Bill ${widget.billNumber} updated successfully!',
+        toastLength: Toast.LENGTH_SHORT,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: Colors.green,
+        textColor: Colors.white,
+      );
+      Navigator.pop(context);
+    } catch (e) {
+      LoadingDialog.hide(context);
+      Fluttertoast.showToast(
+        msg: 'Error updating bill: $e',
+        toastLength: Toast.LENGTH_LONG,
+        gravity: ToastGravity.BOTTOM,
+        backgroundColor: Colors.red,
+        textColor: Colors.white,
+      );
+    } finally {
+      if (mounted) setState(() => _isSaving = false);
+    }
+  }
+
+  Future<void> _updateCorrespondingTransaction() async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+
+      // Find corresponding transaction using bill document ID
+      final transactionQuery = await FirebaseFirestore.instance
+          .collection('transactions')
+          .where('user', isEqualTo: user.uid)
+          .where('billId', isEqualTo: _billDocumentId)
+          .limit(1)
+          .get();
+
+      // Convert bill items to transaction products format
+      List<Map<String, dynamic>> productArray = [];
+      List<String> productNames = [];
+
+      for (var item in _items) {
+        final productName = item['name']?.toLowerCase() ?? '';
+        final quantity = int.tryParse(item['quantity'] ?? '0') ?? 0;
+        final unitPrice = double.tryParse(item['price'] ?? '0') ?? 0.0;
+
+        if (productName.isNotEmpty && quantity > 0 && unitPrice > 0) {
+          productArray.add({
+            'product': productName,
+            'quantity': quantity,
+            'unitPrice': unitPrice,
+          });
+          productNames.add(productName);
+        }
+      }
+
+      final transactionData = {
+        'party': _nameController.text.trim(),
+        'product': productArray,
+        'product_names': productNames,
+        'date': _selectedDate,
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      if (transactionQuery.docs.isNotEmpty) {
+        // Update existing transaction
+        await transactionQuery.docs.first.reference.update(transactionData);
+      } else {
+        // Create new transaction if doesn't exist
+        transactionData['user'] = user.uid;
+        transactionData['type'] = 'Sale';
+        transactionData['status'] = 'Paid';
+        transactionData['billId'] = _billDocumentId as Object;
+        transactionData['timestamp'] = DateTime.now();
+        transactionData['createdAt'] = FieldValue.serverTimestamp();
+
+        final transactionDoc = await FirebaseFirestore.instance
+            .collection('transactions')
+            .add(transactionData);
+
+        // Update bill with transaction reference
+        await FirebaseFirestore.instance
+            .collection('bills')
+            .doc(_billDocumentId)
+            .update({'transactionId': transactionDoc.id});
+      }
+    } catch (e) {
+      print('Error updating corresponding transaction: $e');
+    }
+  }
+
+  // Method to revert stock changes from original bill
+  Future<void> _revertOriginalStockChanges() async {
+    try {
+      // Get original bill data to revert stock changes
+      final originalBillDoc = await FirebaseFirestore.instance
+          .collection('bills')
+          .doc(_billDocumentId)
+          .get();
+
+      if (!originalBillDoc.exists) return;
+
+      final originalData = originalBillDoc.data()!;
+      final originalItems = originalData['items'] as List? ?? [];
+
+      for (var item in originalItems) {
+        final productName = item['name']?.toString().toLowerCase() ?? '';
+        final quantity = int.tryParse(item['quantity']?.toString() ?? '0') ?? 0;
+
+        if (productName.isNotEmpty && quantity > 0) {
+          // Add back the quantity (reverse the sale)
+          await _updateStockForProduct(productName, quantity, 'Purchase');
+        }
+      }
+    } catch (e) {
+      print('Error reverting original stock changes: $e');
+    }
+  }
+
+  // Method to apply new stock changes
+  Future<void> _applyNewStockChanges() async {
+    try {
+      for (var item in _items) {
+        final productName = item['name']?.toLowerCase() ?? '';
+        final quantity = int.tryParse(item['quantity'] ?? '0') ?? 0;
+
+        if (productName.isNotEmpty && quantity > 0) {
+          // Reduce stock for sale
+          await _updateStockForProduct(productName, quantity, 'Sale');
+        }
+      }
+    } catch (e) {
+      print('Error applying new stock changes: $e');
+    }
+  }
+
+  // Helper method to update stock
+  Future<void> _updateStockForProduct(String productName, int quantity, String type) async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final stockQuery = await FirebaseFirestore.instance
+          .collection('stocks')
+          .where('product', isEqualTo: productName)
+          .where('user', isEqualTo: user.uid)
+          .limit(1)
+          .get();
+
+      final quantityChange = type == "Purchase" ? quantity : -quantity;
+
+      if (stockQuery.docs.isNotEmpty) {
+        final currentStock = stockQuery.docs.first.data();
+        final currentQty = currentStock['quantity'] ?? 0;
+        final newQuantity = currentQty + quantityChange;
+
+        // Only update if there's enough stock or if it's a purchase
+        if (newQuantity >= 0 || type == "Purchase") {
+          await stockQuery.docs.first.reference.update({
+            'quantity': newQuantity,
+            'purchase': FieldValue.increment(type == "Purchase" ? quantity : 0),
+            'sales': FieldValue.increment(type == "Sale" ? quantity : 0),
+            'lastUpdated': DateTime.now(),
+          });
+        }
+      } else if (type == "Purchase") {
+        // Create new stock entry for purchase
+        await FirebaseFirestore.instance.collection('stocks').add({
+          'product': productName,
+          'quantity': quantity,
+          'purchase': quantity,
+          'sales': 0,
+          'user': user.uid,
+          'createdAt': DateTime.now(),
+          'lastUpdated': DateTime.now(),
+        });
+      }
+    } catch (e) {
+      print('Error updating stock for product $productName: $e');
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) {
+      return Scaffold(
+        appBar: AppBar(
+          title: Text('Edit Bill - ${widget.billNumber}'),
+          backgroundColor: Colors.indigo,
+          foregroundColor: Colors.white,
+        ),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+
+    final subtotal = _calculateSubtotal();
+    final tax = subtotal * 0.05;
+    final total = subtotal + tax;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Edit Bill - ${widget.billNumber}'),
+        backgroundColor: Colors.indigo,
+        foregroundColor: Colors.white,
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildSectionHeader('CUSTOMER DETAILS'),
+            _buildCustomerForm(),
+            _buildSectionHeader('BILL INFO'),
+            _buildBillInfo(),
+            _buildSectionHeader('ITEMS'),
+            _buildItemsSection(),
+            _buildSectionHeader('SUMMARY'),
+            _buildSummary(subtotal, tax, total),
+            const SizedBox(height: 20),
+            _buildUpdateButton(),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8.0),
+      child: Text(
+        title,
+        style: const TextStyle(fontWeight: FontWeight.bold),
+      ),
+    );
+  }
+
+  Widget _buildCustomerForm() {
+    return Column(
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: AppTextField(
+                controller: _nameController,
+                focusNode: _nameFocusNode,
+                labelText: 'Customer Name',
+                onChanged: (value) => setState(() {}),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.person_add, color: Colors.indigo),
+              onPressed: _showAddCustomerDialog,
+              tooltip: 'Add New Customer',
+            ),
+          ],
+        ),
+        if (_showSuggestions && _nameController.text.isNotEmpty)
+          SuggestionsList(
+            stream: FirestoreHelper.getSuggestions('customers', 'name', _nameController.text),
+            controller: _nameController,
+            focusNode: _nameFocusNode,
+            onSelected: _loadCustomerDetails,
+          ),
+        const SizedBox(height: 8),
+        AppTextField(
+          controller: _phoneController,
+          labelText: 'Phone Number',
+          prefixText: '+91 ',
+          keyboardType: TextInputType.phone,
+          maxLength: 10,
+        ),
+        const SizedBox(height: 8),
+        AppTextField(
+          controller: _cityController,
+          labelText: 'City',
+        ),
+        const SizedBox(height: 8),
+        AppTextField(
+          controller: _stateController,
+          labelText: 'State',
+        ),
+      ],
+    );
+  }
+
+  Widget _buildBillInfo() {
+    return Column(
+      children: [
+        AppTextField(
+          controller: _billNumberController,
+          labelText: 'Bill Number',
+          enabled: false,
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text("Date: "),
+            TextButton(
+              onPressed: _pickDate,
+              child: Text(DateFormat.yMMMd().format(_selectedDate)),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
+  Widget _buildItemsSection() {
+    return Column(
+      children: [
+        ElevatedButton.icon(
+          onPressed: _addItem,
+          icon: const Icon(Icons.add),
+          label: const Text("Add Item"),
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.deepPurple,
+            foregroundColor: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 8),
+        if (_items.isEmpty)
+          const Text("No items added yet")
+        else
+          ..._items.asMap().entries.map((entry) {
+            int index = entry.key;
+            Map<String, dynamic> item = entry.value;
+
+            return Card(
+              margin: const EdgeInsets.only(bottom: 8),
+              child: ListTile(
+                title: Text(item['name'] ?? 'Unknown'),
+                subtitle: Text('Quantity: ${item['quantity'] ?? '0'} kg'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      '₹${item['price'] ?? '0'}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton(
+                      icon: const Icon(Icons.edit, color: Colors.blue),
+                      onPressed: () => _editItem(index),
+                      tooltip: 'Edit Item',
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete, color: Colors.red),
+                      onPressed: () => setState(() => _items.removeAt(index)),
+                      tooltip: 'Delete Item',
+                    ),
+                  ],
+                ),
+              ),
+            );
+          }).toList(),
+      ],
+    );
+  }
+
+  Widget _buildSummary(double subtotal, double tax, double total) {
+    return Column(
+      children: [
+        _buildSummaryRow("Subtotal:", "₹${subtotal.toStringAsFixed(2)}"),
+        _buildSummaryRow("Tax (5%):", "₹${tax.toStringAsFixed(2)}"),
+        _buildSummaryRow(
+          "Total:",
+          "₹${total.toStringAsFixed(2)}",
+          isBold: true,
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSummaryRow(String label, String value, {bool isBold = false}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: TextStyle(fontWeight: isBold ? FontWeight.bold : FontWeight.normal),
+        ),
+        Text(
+          value,
+          style: TextStyle(fontWeight: isBold ? FontWeight.bold : FontWeight.normal),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildUpdateButton() {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        onPressed: _isSaving ? null : _updateBill,
+        style: ElevatedButton.styleFrom(
+          backgroundColor: Colors.green,
+          foregroundColor: Colors.white,
+          padding: const EdgeInsets.symmetric(vertical: 14),
+          minimumSize: const Size(double.infinity, 50),
+        ),
+        child: _isSaving
+            ? const SizedBox(
+          width: 20,
+          height: 20,
+          child: CircularProgressIndicator(color: Colors.white),
+        )
+            : const Text('Update Bill', style: TextStyle(fontSize: 16)),
+      ),
+    );
+  }
+}
+
+class EditItemForm extends StatefulWidget {
+  final Map<String, dynamic> initialItem;
+  final Function(Map<String, dynamic>) onItemUpdated;
+
+  const EditItemForm({
+    super.key,
+    required this.initialItem,
+    required this.onItemUpdated,
+  });
+
+  @override
+  State<EditItemForm> createState() => _EditItemFormState();
+}
+
+class _EditItemFormState extends State<EditItemForm> {
+  final _priceController = TextEditingController();
+  final _quantityController = TextEditingController();
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void initState() {
+    super.initState();
+    _priceController.text = widget.initialItem['price'] ?? '';
+    _quantityController.text = widget.initialItem['quantity'] ?? '';
+  }
+
+  @override
+  void dispose() {
+    _priceController.dispose();
+    _quantityController.dispose();
+    super.dispose();
+  }
+
+  void _updateItem() {
+    if (_formKey.currentState!.validate()) {
+      widget.onItemUpdated({
+        'name': widget.initialItem['name'],
+        'quantity': _quantityController.text,
+        'price': _priceController.text,
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Form(
+      key: _formKey,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            widget.initialItem['name'] ?? 'Unknown Product',
+            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+          ),
+          const SizedBox(height: 16),
+          AppTextField(
+            controller: _quantityController,
+            labelText: 'Quantity',
+            suffixText: 'kg',
+            keyboardType: TextInputType.number,
+            validator: (value) {
+              if (value?.isEmpty ?? true) return 'Enter quantity';
+              final quantity = int.tryParse(value!) ?? 0;
+              if (quantity <= 0) return 'Quantity must be > 0';
+              return null;
+            },
+          ),
+          const SizedBox(height: 12),
+          AppTextField(
+            controller: _priceController,
+            labelText: 'Price per kg',
+            prefixText: '₹',
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            validator: (value) => AppUtils.validatePositiveNumber(value, 'Price'),
+          ),
+          const SizedBox(height: 16),
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: _updateItem,
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text("Update Item"),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class ProductSelectionCard extends StatefulWidget {
+  final Map<String, dynamic> productData;
+  final Function(Map<String, dynamic>) onItemAdded;
+
+  const ProductSelectionCard({
+    super.key,
+    required this.productData,
+    required this.onItemAdded,
+  });
+
+  @override
+  State<ProductSelectionCard> createState() => _ProductSelectionCardState();
+}
+
+class _ProductSelectionCardState extends State<ProductSelectionCard> {
+  final _priceController = TextEditingController();
+  final _quantityController = TextEditingController(text: '1');
+  final _formKey = GlobalKey<FormState>();
+
+  @override
+  void dispose() {
+    _priceController.dispose();
+    _quantityController.dispose();
+    super.dispose();
+  }
+
+  void _addToBill() {
+    if (_formKey.currentState!.validate()) {
+      widget.onItemAdded({
+        'name': widget.productData['product'] ?? 'Unknown',
+        'quantity': _quantityController.text,
+        'price': _priceController.text,
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final availableStock = widget.productData['quantity'] ?? 0;
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Form(
+          key: _formKey,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                widget.productData['product'] ?? 'Unknown Product',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+              ),
+              Text(
+                'Available Stock: $availableStock kg',
+                style: TextStyle(color: Colors.blue.shade600, fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              AppTextField(
+                controller: _quantityController,
+                labelText: 'Quantity',
+                suffixText: 'kg',
+                keyboardType: TextInputType.number,
+                validator: (value) {
+                  if (value?.isEmpty ?? true) return 'Enter quantity';
+                  final quantity = int.tryParse(value!) ?? 0;
+                  if (quantity <= 0) return 'Quantity must be > 0';
+                  if (quantity > availableStock) return 'Max available: $availableStock kg';
+                  return null;
+                },
+              ),
+              const SizedBox(height: 12),
+              AppTextField(
+                controller: _priceController,
+                labelText: 'Price per kg',
+                prefixText: '₹',
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                validator: (value) => AppUtils.validatePositiveNumber(value, 'Price'),
+              ),
+              const SizedBox(height: 16),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _addToBill,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.green,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text("Add to Bill"),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
