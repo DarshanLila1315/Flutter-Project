@@ -1,0 +1,72 @@
+name: flutter_project
+description: "Optimized Flutter Inventory Management Application"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # Core Dependencies
+  cupertino_icons: ^1.0.6
+  intl: ^0.19.0
+  http: ^1.1.0
+
+  # Firebase Dependencies
+  firebase_core: ^2.24.2
+  firebase_auth: ^4.15.3
+  cloud_firestore: ^4.13.6
+
+  # Authentication
+  google_sign_in: ^6.1.5
+
+  # UI Dependencies
+  fluttertoast: ^8.2.4
+
+  # Connectivity & Network
+  connectivity_plus: ^4.0.2
+
+  # File & Storage
+  path_provider: ^2.1.1
+  open_file: ^3.3.2
+  file_saver: ^0.2.9
+
+  # PDF Generation
+  pdf: ^3.10.4
+  printing: ^5.11.0
+
+  # Permissions
+  permission_handler: ^11.0.1
+  device_info_plus: ^9.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.2
+  flutter_launcher_icons: ^0.13.1
+  flutter_native_splash: ^2.3.6
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/logo_adaptive2.png"
+  adaptive_icon_foreground: "assets/logo_adaptive2.png"
+  adaptive_icon_background: "#ffffff"
+  min_sdk_android: 21
+
+flutter_native_splash:
+  color: "#ffffff"
+  image: assets/logo.svg
+  android_12:
+    image: assets/logo.svg
+    icon_background_color: "#ffffff"
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/
+    - assets/fonts/
