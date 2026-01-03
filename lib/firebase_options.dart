@@ -53,7 +53,6 @@ class DefaultFirebaseOptions {
   }
 
   static const FirebaseOptions android = FirebaseOptions(
-    apiKey: 'AIzaSyAmduxoUsBuY8LPJOrCPn2T69-2dAhCcp0',
     appId: '1:861779117481:android:7b78cadad656305e5870b8',
     messagingSenderId: '861779117481',
     projectId: 'collageproject-1022',
